@@ -27,7 +27,11 @@ NOTE: currently, only tested with PostgreSQL.
 # SqlAlchemy versions
 from sqlalchemy import __version__ as SA_VERSION
 SA_12 = SA_VERSION.startswith('1.2')
-SA_13 = SA_VERSION.startswith('1.3')
+# Features introduced by the 1.3 loader implementation remain in 1.4.
+# Keep this compatibility flag true for both branches; use SA_14 for behavior
+# that is specific to the new ORM Select internals.
+SA_13 = SA_VERSION.startswith(('1.3', '1.4'))
+SA_14 = SA_VERSION.startswith('1.4')
 
 # Exceptions that are used here and there
 from .exc import *

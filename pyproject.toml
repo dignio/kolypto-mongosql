@@ -1,24 +1,24 @@
 [tool.poetry]
 name = "mongosql"
-version = "2.0.15-1"
+version = "3.0.0"
 description = "A JSON query engine with SqlAlchemy as a back-end"
-authors = ["Mark Vartanyan <kolypto@gmail.com>"]
-repository = 'https://github.com/kolypto/py-mongosql'
+authors = ["Dignio"]
+repository = "https://github.com/dignio/kolypto-mongosql"
+
 
 [tool.poetry.dependencies]
-python = "^3.6"
-sqlalchemy = '^1.2, !=1.2.9, < 1.4'
-nplus1loader = { version = '^1.0', optional = true }
+python = "^3.14"
+sqlalchemy = '^1.4, < 2'
+nplus1loader = { git = "https://github.com/dignio/kolypto-nplus1loader.git", branch = "master" } # TODO: Change to tag with sqlalchemy 1.4 support
+looseversion = "^1.3.0"
 
-[tool.poetry.dev-dependencies]
-nox = "^2020.8.22"
-pytest = "^6.0.1"
-pytest-cov = "^2.10.1"
-nplus1loader = '^1.0'
-j2cli = '^0.3.10'
+[tool.poetry.group.dev.dependencies]
+nox = "^2025.0"
+pytest = "^9.0"
+pytest-cov = "^7.0"
 psycopg2-binary = '^2.8'
-exdoc = '^0.1.3'
-flask_jsontools = '^0.1.7'
+exdoc = '0.1.3' # TODO Kolypto private library (replace to something else)
+flask_jsontools = {git = "https://github.com/dignio/kolypto-flask-jsontools.git", branch = "master"}  # TODO: Change to tag with sqlalchemy 1.4 support
 
 [tool.pytest.ini_options]
 testpaths = [

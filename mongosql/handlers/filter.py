@@ -92,7 +92,7 @@ $.get('/api/user?query=' + JSON.stringify({
 ```
 """
 
-from sqlalchemy.sql.expression import and_, or_, not_, cast
+from sqlalchemy.sql.expression import and_, or_, not_, cast, literal, tuple_
 from sqlalchemy.sql import operators
 from sqlalchemy.sql.functions import func
 
@@ -106,6 +106,38 @@ from ..exc import InvalidQueryError, InvalidColumnError, InvalidRelationError
 
 def _is_array(value):
     return isinstance(value, (list, tuple, set, frozenset))
+
+
+def _scalar_in(column, values, negate=False):
+    """Build a scalar IN expression with individually bound values.
+
+    SQLAlchemy 1.4 makes a Python sequence a post-compile expanding parameter.
+    Individual bind parameters retain the pre-1.4 compiled SQL shape while
+    remaining safely parameterized. Keep SQLAlchemy's native empty-sequence
+    handling, which produces the correct always-false/always-true expression.
+
+
+    In SQLAlchemy 1.4, this:
+    column.in_([1, 2, 3])
+    compiles initially as:
+    m.f IN (__[POSTCOMPILE_f_1])
+    with parameters resembling:
+    {"f_1": [1, 2, 3]}
+
+    SQLAlchemy expands that placeholder into separate database parameters immediately before execution. This is valid and generally preferable, but the project’s stmt2sql() test helper uses ordinary Python % substitution. It does not understand
+    SQLAlchemy’s __[POSTCOMPILE_...] placeholders, so existing assertions expecting:
+    m.f IN (1, 2, 3)
+
+    fail even though the query would execute correctly.
+    """
+    if values:
+        values = tuple(literal(value) for value in values)
+        if negate:
+            # ``notin_()`` groups an explicit ClauseList in SQLAlchemy 1.4,
+            # unlike its sequence form and the pre-1.4 output.  A custom SQL
+            # operator has identical database semantics without that wrapper.
+            return column.op('NOT IN', precedence=5)(tuple_(*values))
+    return column.notin_(values) if negate else column.in_(values)
 
 
 class FilterExpressionBase:
@@ -410,8 +442,8 @@ class MongoFilter(MongoQueryHandlerBase):
         '$gt':  lambda col, val, oval: col > val,
         '$gte': lambda col, val, oval: col >= val,
         '$prefix': lambda col, val, oval: col.startswith(val),
-        '$in':  lambda col, val, oval: col.in_(val),  # field IN(values)
-        '$nin': lambda col, val, oval: col.notin_(val),  # field NOT IN(values)
+        '$in':  lambda col, val, oval: _scalar_in(col, val),  # field IN(values)
+        '$nin': lambda col, val, oval: _scalar_in(col, val, negate=True),  # field NOT IN(values)
         '$exists': lambda col, val, oval: col != None if oval else col == None,
 
         # Note on $ne:

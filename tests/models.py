@@ -1,13 +1,15 @@
+import os
+
 import sqlalchemy
 from sqlalchemy import create_engine
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.ext.mutable import MutableDict
-from sqlalchemy.orm import sessionmaker, scoped_session, column_property, deferred
+from sqlalchemy.orm import sessionmaker, column_property, deferred
 
 from sqlalchemy.sql.expression import and_
 from sqlalchemy.ext.declarative import declarative_base, declared_attr
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, Table
-from sqlalchemy.orm import relationship, backref, remote, foreign
+from sqlalchemy import Column, String, Integer, Boolean, DateTime
+from sqlalchemy.orm import relationship, backref
 from sqlalchemy.sql.schema import ForeignKey
 
 from sqlalchemy.dialects import postgresql as pg
@@ -455,7 +457,15 @@ def init_database(autoflush=True):
     """ Init DB
     :rtype: (sqlalchemy.engine.Engine, sqlalchemy.orm.Session)
     """
-    engine = create_engine('postgresql://postgres:postgres@localhost/test_mongosql', echo=False)
+    database_url = (
+        f"postgresql+psycopg2://"
+        f"{os.getenv('POSTGRES_USER', 'postgres')}:"
+        f"{os.getenv('POSTGRES_PASSWORD', 'postgres')}@"
+        f"{os.getenv('POSTGRES_HOST', 'localhost')}:"
+        f"{os.getenv('POSTGRES_PORT', '5432')}/test_mongosql"
+    )
+
+    engine = create_engine(database_url, echo=False)
     Session = sessionmaker(autocommit=autoflush, autoflush=autoflush, bind=engine)
     return engine, Session
 

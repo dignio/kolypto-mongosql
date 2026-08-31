@@ -39,7 +39,9 @@ class RestfulModelView(RestfulView, CrudViewMixin):
 
         :rtype: dict | None
         """
-        return (request.get_json() or {}).get('query', None)
+        # return (request.get_json() or {}).get('query', None)
+
+        return (request.get_json(silent=True) or {}).get("query")
 
     # CrudViewMixin demands: needs to be able to get a session so that it can run a query
     def _get_db_session(self):

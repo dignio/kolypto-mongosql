@@ -677,7 +677,11 @@ class MongoProject(MongoQueryHandlerBase):
 
     def alter_query(self, query, as_relation):
         assert as_relation is not None
-        return query.options(self.compile_options(as_relation))
+        # compile_options() returns a list. Unpack it so SQLAlchemy receives
+        # options(load_only(...), raiseload(...)), not
+        # options([load_only(...), raiseload(...)]). Legacy Query accepted
+        # the list, but SQLAlchemy 1.4 ORM Select requires separate arguments.
+        return query.options(*self.compile_options(as_relation))
 
     # Extra features
 

@@ -74,9 +74,17 @@ from types import SimpleNamespace
 
 from sqlalchemy import exc as sa_exc
 from sqlalchemy.orm import aliased, Query
+from sqlalchemy.sql import LABEL_STYLE_TABLENAME_PLUS_COL
 
 from .base import MongoQueryHandlerBase
 from ..exc import InvalidQueryError, DisabledError, InvalidColumnError, InvalidRelationError
+
+
+def _with_labels(query):
+    """Apply table-qualified labels to either Query or ORM Select."""
+    if hasattr(query, 'with_labels'):
+        return query.with_labels()
+    return query.set_label_style(LABEL_STYLE_TABLENAME_PLUS_COL)
 
 
 class MongoJoin(MongoQueryHandlerBase):
@@ -205,7 +213,11 @@ class MongoJoin(MongoQueryHandlerBase):
             # Get the relationship and its target model
             rel = self._get_relation_securely(relation_name)
             target_model = self.bags.relations.get_target_model(relation_name)
-            target_model_aliased = aliased(rel)  # aliased(rel) and aliased(target_model) is the same thing
+            # Before SQLAlchemy 1.4, aliased(relationship) behaved like
+            # aliased(target_model). In SQLAlchemy 1.4 it instead targets the
+            # relationship's Mapper, preventing access to model attributes such as
+            # hybrid properties. Alias the mapped model class explicitly.
+            target_model_aliased = aliased(target_model)
 
             # Prepare the nested MongoQuery
             # We do it here so that all validation errors come on input()
@@ -435,7 +447,7 @@ class MongoJoin(MongoQueryHandlerBase):
         else:
             rel_load = as_relation.joinedload(mjp.relationship)
             # Make sure there's no column name clash in the results
-            query = query.with_labels()
+            query = _with_labels(query)
 
         # Run nested MongoQuery
         # It's already been alias()ed and as_relation_from()ed
@@ -550,7 +562,7 @@ class MongoJoin(MongoQueryHandlerBase):
 
         # Now, when there are many different models joined in one query, we'll have name clashes.
         # To prevent that, with_labels() will give unique names to every column.
-        query = query.with_labels()
+        query = _with_labels(query)
 
         # Now, the query contains all the results.
         # Now we use `contains_eager()` to tell sqlalchemy that the resulting rows
@@ -617,7 +629,8 @@ class MongoJoin(MongoQueryHandlerBase):
         # It's already been alias()ed and as_relation_from()ed
         query = mjp.nested_mongoquery \
             .from_query(joined_query) \
-            .end().with_labels()
+            .end()
+        query = _with_labels(query)
 
         # Done
         return query.options(
@@ -691,7 +704,14 @@ class MongoJoin(MongoQueryHandlerBase):
         #   SELECT * FROM users WHERE ... LIMIT 10
         #   ) AS users
         #   LEFT JOIN articles ....
-        if query._limit is not None or query._offset is not None:  # accessing protected properties of Query
+        # SQLAlchemy 1.4 renamed these internal attributes to
+        # ``_limit_clause`` / ``_offset_clause``.
+        limit_clause = getattr(query, '_limit_clause', None)
+        offset_clause = getattr(query, '_offset_clause', None)
+        if not hasattr(query, '_limit_clause'):
+            limit_clause = getattr(query, '_limit', None)
+            offset_clause = getattr(query, '_offset', None)
+        if limit_clause is not None or offset_clause is not None:
             # We're going to make it into a subquery, so let's first make sure that we have enough columns selected.
             # We'll need columns used in the ORDER BY clause selected, so let's get them out, so that we can use them
             # in the ORDER BY clause later on (a couple of statements later)
@@ -1140,15 +1160,17 @@ def get_mongoquery_cache_key(query, nested_mongoquery):
     """
     # First, get some sort of hash from the sqlalchemy query
     # First, compile the query into a string. That's the first part of our key.
-    if query.session:
+    session = getattr(query, 'session', None)
+    statement = getattr(query, 'statement', query)
+    if session:
         # Get the current dialect from the session's engine and use it for compilation
-        dialect = query.session.bind.dialect
-        stmt_compiled = query.statement.compile(dialect=dialect)
+        dialect = session.bind.dialect
+        stmt_compiled = statement.compile(dialect=dialect)
     else:
         # When there's no session, try to compile it without a dialect.
         # This may throw errors about DB-specific types that are counter-intuitive, so we have to explain them to the user
         try:
-            stmt_compiled = query.statement.compile()
+            stmt_compiled = statement.compile()
         except sa_exc.UnsupportedCompilationError as e:
             raise RuntimeError(
                 "Failed to compile an SQL statement. "
@@ -1283,8 +1305,18 @@ def _sa_create_joins(relation, left, right):
                 source_polymorphic=True,
                 dest_polymorphic=True,
                 of_type_mapper=right_info.mapper)
+    elif SA_VERSION.startswith('1.4'):
+        # 1.4 replaced ``of_type_mapper`` with ``of_type_entity`` and
+        # derives the destination polymorphic behavior from that inspector.
+        primaryjoin, secondaryjoin, source_selectable, \
+        dest_selectable, secondary, target_adapter = \
+            relation.prop._create_joins(
+                source_selectable=adapt_from,
+                dest_selectable=adapt_to,
+                source_polymorphic=True,
+                of_type_entity=right_info)
     else:
-        raise RuntimeError('Unsupported SqlAlchemy version! Expected 1.2.x or 1.3.x')
+        raise RuntimeError('Unsupported SqlAlchemy version! Expected 1.2.x, 1.3.x, or 1.4.x')
 
     return (
         primaryjoin,

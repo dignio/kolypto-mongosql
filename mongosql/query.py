@@ -759,7 +759,12 @@ class MongoQuery:
             When the time comes to build an actual SqlAlchemy query, we're going to use the query that the user has
             provided with from_query(). If none was provided, we'll use the default one.
         """
-        return self._query or Query([self.model])
+        # Do not use ``self._query or ...``: it calls bool(self._query).
+        # SQLAlchemy 1.3 Query tolerated that, but a 1.4 ORM Select raises
+        # ``TypeError: Boolean value of this clause is not defined``.
+        # None is our only "no query supplied" value, so an identity check
+        # returns either Query or Select unchanged without evaluating it.
+        return self._query if self._query is not None else Query([self.model])
 
     def _init_mongoquery_for_related_model(self, relationship_name: str) -> 'MongoQuery':
         """ Create a MongoQuery object for a model, related through a relationship with the given name.
