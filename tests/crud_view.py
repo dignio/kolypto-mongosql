@@ -39,7 +39,6 @@ class RestfulModelView(RestfulView, CrudViewMixin):
 
         :rtype: dict | None
         """
-        # return (request.get_json() or {}).get('query', None)
 
         return (request.get_json(silent=True) or {}).get("query")
 

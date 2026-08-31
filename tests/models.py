@@ -2,6 +2,7 @@ import os
 
 import sqlalchemy
 from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import sessionmaker, column_property, deferred
@@ -457,12 +458,13 @@ def init_database(autoflush=True):
     """ Init DB
     :rtype: (sqlalchemy.engine.Engine, sqlalchemy.orm.Session)
     """
-    database_url = (
-        f"postgresql+psycopg2://"
-        f"{os.getenv('POSTGRES_USER', 'postgres')}:"
-        f"{os.getenv('POSTGRES_PASSWORD', 'postgres')}@"
-        f"{os.getenv('POSTGRES_HOST', 'localhost')}:"
-        f"{os.getenv('POSTGRES_PORT', '5432')}/test_mongosql"
+    database_url = URL.create(
+        "postgresql+psycopg2",
+        username=os.getenv("POSTGRES_USER", "postgres"),
+        password=os.getenv("POSTGRES_PASSWORD", "postgres"),
+        host=os.getenv("POSTGRES_HOST", "localhost"),
+        port=int(os.getenv("POSTGRES_PORT", "5432")),
+        database=os.getenv("POSTGRES_DB", "postgres")
     )
 
     engine = create_engine(database_url, echo=False)
