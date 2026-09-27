@@ -1,6 +1,6 @@
 import nox.sessions
 
-PYTHON_VERSIONS = ['3.14']
+PYTHON_VERSIONS = ['3.12', '3.13', '3.14']
 SQLALCHEMY_VERSIONS = [
     '1.4.45',
 ]
