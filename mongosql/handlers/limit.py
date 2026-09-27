@@ -23,6 +23,8 @@ Values: can be a number, or a `null`.
 
 from sqlalchemy import inspect
 from sqlalchemy.sql import func, literal_column
+from sqlalchemy.sql import LABEL_STYLE_TABLENAME_PLUS_COL
+from sqlalchemy.orm import Bundle, Query
 
 from .base import MongoQueryHandlerBase
 from ..exc import InvalidQueryError, InvalidColumnError, InvalidRelationError
@@ -196,8 +198,41 @@ class MongoLimit(MongoQueryHandlerBase):
                 ).label('group_row_n')  # give it a name that we can use later
             )
 
-            # Now, make ourselves into a subquery
-            query = query.from_self()
+            # Wrap this query so the limit applies to each relationship
+            # separately. For example, ``User.articles: limit=3`` should load
+            # up to three articles per user, not three articles in total.
+            #
+            # Before SQLAlchemy 1.4, select-in loading used Query.from_self()
+            # for this. SQLAlchemy 1.4 uses an ORM Select, which does not have
+            # from_self(), so we build the equivalent subquery ourselves.
+            # Keep the parent key, mapped model, loader options, and current
+            # relationship path so SQLAlchemy can attach every loaded item to
+            # the correct parent and still apply projections or nested joins.
+            if hasattr(query, 'from_self'):
+                query = query.from_self()
+            else:
+                loader_options = query._with_options
+                # Tell SQLAlchemy where this nested query is being loaded.
+                # For example, at ``User -> articles``, options for
+                # ``articles -> comments`` must stay relative to Article;
+                # without this path they may be treated as top-level options
+                # and ignored.
+                current_path = getattr(query._compile_options,
+                                       '_current_path', None)
+                inner = query.set_label_style(
+                    LABEL_STYLE_TABLENAME_PLUS_COL
+                ).correlate(None).subquery()._anonymous_fromclause()
+                query = Query([
+                    Bundle('pk', *self._window_over_columns),
+                    self.model,
+                    literal_column('group_row_n'),
+                ]).options(*loader_options)._from_selectable(inner)
+                # Preserve the loader's ORM path without replacing the
+                # automatic alias-adaptation flags installed above.
+                if current_path is not None:
+                    query._compile_options += {
+                        '_current_path': current_path,
+                    }
 
             # Well, it turns out that subsequent joins somehow work.
             # I have no idea how, but they do.

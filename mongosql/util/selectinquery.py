@@ -1,6 +1,10 @@
+import collections
+import itertools
+
 from sqlalchemy.orm.strategy_options import loader_option, _UnboundLoad
 from sqlalchemy.orm.strategies import SelectInLoader
-from sqlalchemy.orm import properties
+from mongosql import SA_14
+from sqlalchemy.orm import properties, Query
 from sqlalchemy import log, util
 
 
@@ -23,14 +27,22 @@ class SelectInQueryLoader(SelectInLoader, util.MemoizedSlots):
 
     __slots__ = ('_alter_query', '_cache_key', '_bakery')
 
-    def create_row_processor(self, context, path, loadopt, mapper, result, adapter, populators):
+    def create_row_processor(self, context, *args):
+        if SA_14:
+            query_entity, path, loadopt, mapper, result, adapter, populators = args
+        else:
+            path, loadopt, mapper, result, adapter, populators = args
+
         # Pluck the custom callable that alters the query out of the `loadopt`
         self._alter_query = loadopt.local_opts['alter_query']
         self._cache_key = loadopt.local_opts['cache_key']
 
         # Call super
-        return super(SelectInQueryLoader, self) \
-            .create_row_processor(context, path, loadopt, mapper, result, adapter, populators)
+        parent = super(SelectInQueryLoader, self).create_row_processor
+        if SA_14:
+            return parent(context, query_entity, path, loadopt, mapper,
+                          result, adapter, populators)
+        return parent(context, path, loadopt, mapper, result, adapter, populators)
 
     # The easiest way would be to just copy `SelectInLoader` and make adjustments to the code,
     # but that would require us supporting it, porting every change from SqlAlchemy.
@@ -61,6 +73,105 @@ class SelectInQueryLoader(SelectInLoader, util.MemoizedSlots):
             lambda: (self._alter_query, self._cache_key),
             size=300  # we can expect a lot of different queries
         )
+
+    if SA_14:
+        # SQLAlchemy <=1.3 executed select-in loads through the bakery above,
+        # where we could inject _alter_query(). SQLAlchemy 1.4 removed that
+        # baked Query path and executes an ORM Select in _load_via_parent()
+        # or _load_via_child(), so apply our callback at those final execution
+        # points instead. For example:
+        #
+        #   selectinquery(User.articles,
+        #                 lambda q: q.filter(Article.id > 10))
+        #
+        # must change the second query from:
+        #
+        #   WHERE article.uid IN (...)
+        #
+        # to:
+        #
+        #   WHERE article.uid IN (...) AND article.id > 10
+        #
+        # Most callbacks return an ORM Select, which SQLAlchemy can execute
+        # normally. A per-parent relationship limit is the exception: it
+        # rebuilds a legacy Query to emulate Query.from_self(). That Query
+        # must be executed separately to preserve rows shaped like
+        # ``((parent_id,), RelatedModel(...), group_row_n)``.
+        def _load_via_parent(self, our_states, query_info, q, context):
+            q = self._alter_query(q)
+            if isinstance(q, Query):
+                return self._load_via_parent_query(
+                    our_states, query_info, q, context)
+            return super(SelectInQueryLoader, self)._load_via_parent(
+                our_states, query_info, q, context)
+
+        def _load_via_parent_query(self, our_states, query_info, q, context):
+            """Execute the legacy Query produced by the window-limit path.
+
+            Adapted from SQLAlchemy 1.4 SelectInLoader._load_via_parent().
+
+            In 1.3, select-in loading used a baked Query and executed it as a
+            Query, preserving ORM rows such as::
+
+                ((1,), Article(id=10)), ((1,), Article(id=11))
+                ((2,), Article(id=20))
+
+            In 1.4, SQLAlchemy normally executes its ORM Select with
+            Session.execute(). MongoSQL's per-parent limit temporarily turns
+            that Select back into a Query (to emulate Query.from_self()).
+            Session.execute(Query) loses the Query's ORM row metadata, so we
+            execute it with Query.all(), like the 1.3 path did.
+
+            The first value is the parent key and the second is the mapped
+            related object. We group the example into::
+
+                (1,) -> [Article(id=10), Article(id=11)]
+                (2,) -> [Article(id=20)]
+
+            and assign those collections to User(1).articles and
+            User(2).articles. This keeps SQLAlchemy 1.4's batching and
+            relationship-population behavior; only Query execution differs.
+            """
+            uselist = self.uselist
+            empty_result = () if uselist else None
+            q = q.with_session(context.session)
+
+            while our_states:
+                chunk = our_states[:self._chunksize]
+                our_states = our_states[self._chunksize:]
+                primary_keys = [
+                    key[0] if query_info.zero_idx else key
+                    for key, state, state_dict, overwrite in chunk
+                ]
+                rows = q.params(primary_keys=primary_keys).all()
+                data = collections.defaultdict(list)
+                for key, values in itertools.groupby(rows,
+                                                       lambda row: row[0]):
+                    data[key].extend(row[1] for row in values)
+
+                for key, state, state_dict, overwrite in chunk:
+                    if not overwrite and self.key in state_dict:
+                        continue
+                    collection = data.get(key, empty_result)
+                    if not uselist and collection:
+                        if len(collection) > 1:
+                            util.warn(
+                                "Multiple rows returned with uselist=False "
+                                "for eagerly-loaded attribute '%s'" % self)
+                        collection = collection[0]
+                    state.get_impl(self.key).set_committed_value(
+                        state, state_dict, collection)
+
+        def _load_via_child(self, our_states, none_states, query_info, q,
+                            context):
+            q = self._alter_query(q)
+            # This path normally remains an ORM Select. If a callback returns
+            # a legacy Query, give its statement to SQLAlchemy 1.4's loader,
+            # which expects an executable Select here.
+            if isinstance(q, Query):
+                q = q.statement
+            return super(SelectInQueryLoader, self)._load_via_child(
+                our_states, none_states, query_info, q, context)
 
 
 # region Bakery Wrapper that will apply alter_query() in the end
