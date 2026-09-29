@@ -1,4 +1,4 @@
-from distutils.version import LooseVersion
+from looseversion import LooseVersion
 
 from mongosql import SA_VERSION, SA_12, SA_13
 
